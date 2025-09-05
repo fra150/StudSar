@@ -5,19 +5,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from sentence_transformers import SentenceTransformer
-# new imports 
-from transformers import pipeline, Pipeline
 """
-StudSar - AI semantic memory system based on custom neural network.
-Implemented with PyTorch and SentenceTransformers
+StudSar - Sistema di memoria semantica AI basato su rete neurale personalizzata.
+Implementato con PyTorch e SentenceTransformers.
 """
 
 import warnings
 # Ignore specific warnings (optional)
 warnings.filterwarnings("ignore", category=UserWarning) # Example for common PyTorch/SentenceTransformers warnings
 
-#  Language Model Configuration 
-# Attempted to import spaCy, but handled as optional
+# --- Language Model Configuration ---
+# Tentativo di importare spaCy, ma gestito come opzionale
 try:
     import spacy
     SPACY_MODEL_NAME = "en_core_web_sm"
@@ -36,11 +34,11 @@ except ImportError:
     print("SpaCy not installed. Word segmentation will be used as fallback.")
     print("To install spaCy (optional): pip install spacy && python -m spacy download en_core_web_sm")
 
-# The segmentation Function 
+# --- Segmentation Function ---
 def segment_text(text, segment_length=100, use_spacy=True, spacy_sentences_per_segment=3):
     """Segments the text (words or sentences via spaCy)."""
     segments = []
-    #Only use spaCy if it is available and the user wants to use it  
+    # Solo usa spaCy se è disponibile e l'utente lo vuole usare
     if use_spacy and SPACY_AVAILABLE and nlp:
         try:
             doc = nlp(text)
@@ -51,25 +49,26 @@ def segment_text(text, segment_length=100, use_spacy=True, spacy_sentences_per_s
         except Exception as e:
             print(f"SpaCy error, fallback to words: {e}")
             use_spacy = False # Force fallback
-   
-    # Fallback to true word-based segmentation 
+    
+    # Fallback a segmentazione basata su parole
     if not (use_spacy and SPACY_AVAILABLE and nlp): 
         words = text.split()
         if not words: return []
         for i in range(0, len(words), segment_length):
             segments.append(" ".join(words[i:i + segment_length]))
+
     # Filter empty segments
     segments = [seg for seg in segments if seg.strip()]
     print(f"Text segmented into {len(segments)} blocks.")
     return segments
 
-#  StudSar Neural Network 
+# --- StudSar Neural Network ---
 class StudSarNeural(nn.Module):
     """
     StudSar Neural Network implemented as PyTorch nn.Module.
     Stores associative markers (embeddings) and enables similarity search.
     """
-    def __init__(self, embedding_dim, initial_capacity=1024, device=None): #Remember you who are reading that here you can change the number --> int__cap ... 
+    def __init__(self, embedding_dim, initial_capacity=1024, device=None):
         super().__init__()
 
         self.embedding_dim = embedding_dim
@@ -83,21 +82,19 @@ class StudSarNeural(nn.Module):
 
         # Mapping from internal ID (tensor index) to original segment
         self.id_to_segment = {}
-        # Mapping from internal ID to segment metadata (emotion tags, etc.)
-        self.id_to_segment_metadata = {}
         # Counter for next available ID
         self.next_id = 0
 
         print(f"StudSarNeural network initialized with embedding dimension {self.embedding_dim}.")
         print(f"Initial memory capacity: Dynamic (grows on-demand)")
 
-    def add_marker(self, segment_text, embedding_vector, metadata=None):
+    def add_marker(self, segment_text, embedding_vector):
         """Adds a marker (embedding) to the network's memory."""
         if not isinstance(embedding_vector, np.ndarray):
              print("Error: embedding_vector is not a numpy ndarray.")
              return None
         if embedding_vector.shape[0] != self.embedding_dim:
-             print(f"Error: Embedding dimension ({embedding_vector.shape[0]}) does not match network dimension ({self.embedding_dim}).") 
+             print(f"Error: Embedding dimension ({embedding_vector.shape[0]}) does not match network dimension ({self.embedding_dim}).")
              return None
 
         # Convert to tensor and move to correct device
@@ -115,12 +112,6 @@ class StudSarNeural(nn.Module):
         # Store mapping
         current_id = self.next_id
         self.id_to_segment[current_id] = segment_text
-        
-        # Store metadata if provided
-        if metadata is not None:
-            self.id_to_segment_metadata[current_id] = metadata
-        else:
-            self.id_to_segment_metadata[current_id] = {}
 
         self.next_id += 1
         return current_id
@@ -185,49 +176,32 @@ class StudSarManager:
     def __init__(self, model_name='all-MiniLM-L6-v2', initial_capacity=1024):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"StudSarManager will use device: {self.device}")
-        # Load model 
+        # Load model to generate markers ("understanding" phase)
         self.embedding_generator = SentenceTransformer(model_name, device=self.device)
         self.embedding_dim = self.embedding_generator.get_sentence_embedding_dimension()
 
         # Initialize StudSar neural network
         self.studsar_network = StudSarNeural(self.embedding_dim, initial_capacity, device=self.device).to(self.device)
-        
-        #  sentiment classifier "this optional"
-        try:
-            self._emotion_pipe: Pipeline = pipeline(
-                task="sentiment-analysis",
-                model="cardiffnlp/twitter-roberta-base-sentiment-latest",
-                device=0 if torch.cuda.is_available() else -1,
-            )
-            print("Sentiment pipeline loaded_emotion tagging enabled.")
-        except Exception as e:
-            self._emotion_pipe = None
-            print(f"Sentiment pipeline unavailable ({e}); emotion tags disabled.")
 
         print(f"\n--- StudSarManager Initialization ---")
         print(f"Embedding Generator Model: {model_name} (Dim: {self.embedding_dim})")
         print(f"StudSarNeural network ready on device: {self.studsar_network.device}")
-        print(f" Ye void bro \n")
-        
+        print(f"-----------------------------------\n")
+
+
     def generate_embedding(self, text):
         """Generates embedding for a text using loaded model."""
         if not text or not isinstance(text, str): return None
         embedding = self.embedding_generator.encode(text, convert_to_numpy=True)
         return embedding
-        
-    # helper
-    def _get_emotion(self, text: str) -> str | None:
-        if not self._emotion_pipe:
-            return None
-        label = self._emotion_pipe(text[:512], truncation=True, max_length=512)[0]["label"]
-        # map model's labels → our tags
-        return {"Positive": "pleasant", "Neutral": "neutral", "Negative": "unpleasant"}.get(label, "neutral")
+
 
     def build_network_from_text(self, text, segment_length=100, use_spacy_segmentation=True, spacy_sentences_per_segment=3):
         """Segments text and populates StudSarNeural network."""
         print("\n--- Building StudSar Network from Text ---")
         self.studsar_network = StudSarNeural(self.embedding_dim, device=self.device).to(self.device)
         print("StudSarNeural network reset.")
+
 
         segments = segment_text(text, segment_length, use_spacy_segmentation, spacy_sentences_per_segment)
         if not segments:
@@ -240,17 +214,14 @@ class StudSarManager:
             if not seg.strip(): continue # Skip empty segments after join
             embedding = self.generate_embedding(seg)
             if embedding is not None:
-                emotion = self._get_emotion(seg)
-                metadata = {"emotion": emotion} if emotion else {}
-                
-                marker_id = self.studsar_network.add_marker(seg, embedding, metadata)
+                marker_id = self.studsar_network.add_marker(seg, embedding)
                 if marker_id is not None:
                      added_count += 1
             if (i + 1) % 50 == 0: print(f"  Processed {i+1}/{len(segments)} segments...")
 
         print(f"Added {added_count} markers to StudSar network.")
         print(f"Network memory now contains: {self.studsar_network.get_total_markers()} markers.")
-        print("*** Network Construction Complete ***\n")
+        print("--- Network Construction Complete ---\n")
 
 
     def search(self, query_text, k=1):
@@ -259,30 +230,27 @@ class StudSarManager:
         print(f"Query: '{query_text}'")
         if not query_text or not isinstance(query_text, str):
              print("Invalid query.")
-             return [], [], [], []
+             return [], [], []
 
         query_embedding = self.generate_embedding(query_text)
         if query_embedding is None:
             print("Unable to generate embedding for query.")
-            return [], [], [], []
+            return [], [], []
 
         indices, similarities, segments = self.studsar_network.search_similar_markers(query_embedding, k=k)
-        emotions = [self.studsar_network.id_to_segment_metadata.get(i, {}).get("emotion") for i in indices]
 
         if not indices:
              print("No results found.")
         else:
             print(f"Found {len(indices)} results:")
-            for i, (idx, sim, seg, emo) in enumerate(zip(indices, similarities, segments, emotions), 1):
-                print(f"{i}. ID={idx}  sim={sim:.4f}  emo={emo or '-'}  text='{seg[:90]}…'")
 
         print("--- Search Complete ---\n")
-        return indices, similarities, segments, emotions
+        return indices, similarities, segments
 
     def update_network(self, new_text_segment):
         """Adds a new segment to existing StudSar network."""
         print("\n--- Updating StudSar Network ---")
-        print(f"Adding new segment: '{new_text_segment[:100]}...'") #here you can always change the number
+        print(f"Adding new segment: '{new_text_segment[:100]}...'")
         if not new_text_segment or not isinstance(new_text_segment, str):
              print("Invalid segment for update.")
              return None
@@ -291,11 +259,8 @@ class StudSarManager:
         if embedding is None:
             print("Unable to generate embedding for new segment.")
             return None
-            
-        emotion = self._get_emotion(new_text_segment)
-        metadata = {"emotion": emotion} if emotion else {}
 
-        marker_id = self.studsar_network.add_marker(new_text_segment, embedding, metadata)
+        marker_id = self.studsar_network.add_marker(new_text_segment, embedding)
 
         if marker_id is not None:
             print(f"New marker added with ID {marker_id}.")
@@ -304,37 +269,36 @@ class StudSarManager:
             return marker_id
         else:
              print("Update failed.")
-             print(" *** Update Failed *** \n")
+             print("--- Update Failed ---\n")
              return None
 
     def save(self, filepath="studsar_neural_memory.pth"):
         """Saves StudSarNeural network state and mappings."""
-        print(f"\n---> Saving StudSar State <---")
+        print(f"\n--- Saving StudSar State ---")
         state = {
             'network_state_dict': self.studsar_network.state_dict(),
             'id_to_segment': self.studsar_network.id_to_segment,
-            'id_to_segment_metadata': self.studsar_network.id_to_segment_metadata,
             'next_id': self.studsar_network.next_id,
             'embedding_dim': self.studsar_network.embedding_dim,
-            'embedding_model_name': 'all-MiniLM-L18-10-v3' # Save actual model name instead of class name
+            'embedding_model_name': 'all-MiniLM-L6-v2' # Save actual model name instead of class name
         }
         try:
             torch.save(state, filepath)
             print(f"StudSar state saved to: {filepath}")
-            print("---> Save Complete <---\n")
+            print("--- Save Complete ---\n")
             return True
         except Exception as e:
             print(f"Error during save: {e}")
-            print("---> Save Failed <---\n")
+            print("--- Save Failed ---\n")
             return False
 
     @classmethod
     def load(cls, filepath="studsar_neural_memory.pth", model_name=None):
         """Loads state from file."""
-        print(f"\n---> Loading StudSar State <---")
+        print(f"\n--- Loading StudSar State ---")
         if not os.path.exists(filepath):
             print(f"Error: File '{filepath}' not found.")
-            print("--->> Load Failed <<---\n")
+            print("--- Load Failed ---\n")
             return None
 
         try:
@@ -363,6 +327,7 @@ class StudSarManager:
                 print("--- Load Failed ---\n")
                 return None
 
+
             # Reconstruct network and load state
             manager.studsar_network = StudSarNeural(manager.embedding_dim, device=manager.device).to(manager.device)
             
@@ -378,31 +343,31 @@ class StudSarManager:
             # Now load the state dict
             manager.studsar_network.load_state_dict(state['network_state_dict'])
             manager.studsar_network.id_to_segment = state.get('id_to_segment', {})
-            manager.studsar_network.id_to_segment_metadata = state.get('id_to_segment_metadata', {})
             manager.studsar_network.next_id = state.get('next_id', 0)
 
             print(f"StudSar state loaded from: {filepath}")
             print(f"Number of markers loaded: {manager.studsar_network.get_total_markers()}")
-            print("-*- Load Complete -*-\n")
+            print("--- Load Complete ---\n")
             return manager
 
         except Exception as e:
             print(f"General error during loading: {e}")
             import traceback
             traceback.print_exc() # Print stack trace for debug
-            print("-#-> Load Failed <-#-\n")
+            print("--- Load Failed ---\n")
             return None
 
-#  Usage Example 
+
+# --- Usage Example ---
 if __name__ == "__main__":
 
-    # EXAMPLE TEXT
+    # 1. EXAMPLE TEXT
     example_text = (
         "Artificial intelligence (AI) is intelligence demonstrated by machines, "
         "as opposed to the natural intelligence displayed by humans or animals. "
         "Leading AI textbooks define the field as the study of 'intelligent agents': "
         "any system that perceives its environment and takes actions that maximize its chance of successfully achieving its goals. "
-        # Add more text for better testing here --> 
+        # Add more text for better testing...
         "Some popular accounts use the term 'artificial intelligence' to describe machines that mimic 'cognitive' functions that humans associate with the human mind, "
         "such as 'learning' and 'problem-solving', however, this definition is rejected by major AI researchers. "
         "AI applications include advanced web search engines, recommendation systems, understanding human speech, self-driving cars, generative tools, "
@@ -410,7 +375,7 @@ if __name__ == "__main__":
         "Machine learning is a core part of modern AI."
     )
 
-    # CREATE MANAGER AND BUILD NETWORK
+    # 2. CREATE MANAGER AND BUILD NETWORK
     studsar_manager = StudSarManager()
     studsar_manager.build_network_from_text(
         example_text,
@@ -418,49 +383,51 @@ if __name__ == "__main__":
         spacy_sentences_per_segment=2
     )
 
-    # EXECUTE A QUERY
+    # 3. EXECUTE A QUERY
     query = "What are AI applications?"
-    ids, sims, segs, emotions = studsar_manager.search(query, k=2)
+    ids, sims, segs = studsar_manager.search(query, k=2)
     if ids:
          print("Best results found for query:")
          for i in range(len(ids)):
-              print(f"  {i+1}. ID: {ids[i]}, Sim: {sims[i]:.4f}, Emo: {emotions[i] or '-'} - Seg: '{segs[i][:120]}...'")
+              print(f"  {i+1}. ID: {ids[i]}, Sim: {sims[i]:.4f} - Seg: '{segs[i][:120]}...'")
 
-    # UPDATE THE NETWORK
+
+    # 4. UPDATE THE NETWORK
     new_text = "Deep learning is a subset of machine learning based on artificial neural networks with representation learning. It enables computers to learn from experience and understand the world in terms of a hierarchy of concepts."
     new_id = studsar_manager.update_network(new_text)
 
-    # RE-EXECUTE QUERY TO SEE IF NEW SEGMENT IS FOUND
+    # 5. RE-EXECUTE QUERY TO SEE IF NEW SEGMENT IS FOUND
     query_dl = "Tell me about deep learning"
-    ids_dl, sims_dl, segs_dl, emotions_dl = studsar_manager.search(query_dl, k=1)
+    ids_dl, sims_dl, segs_dl = studsar_manager.search(query_dl, k=1)
     if ids_dl:
          print("Best result for 'deep learning':")
-         print(f"  - ID: {ids_dl[0]}, Sim: {sims_dl[0]:.4f}, Emo: {emotions_dl[0] or '-'} - Seg: '{segs_dl[0][:120]}...'")
+         print(f"  - ID: {ids_dl[0]}, Sim: {sims_dl[0]:.4f} - Seg: '{segs_dl[0][:120]}...'")
          # Check if ID matches the one just added
          if new_id is not None and ids_dl[0] == new_id:
               print("  (Correctly identified newly added segment!)")
 
-    # SAVE STATE
+
+    # 6. SAVE STATE
     save_path = "studsar_neural_demo.pth"
     studsar_manager.save(save_path)
 
-    # DELETE AND RELOAD
+    # 7. DELETE AND RELOAD
     del studsar_manager
     print("\nManager instance deleted. Attempting reload...")
     studsar_reloaded = StudSarManager.load(save_path)
 
-    # VERIFY LOADING AND RE-EXECUTE QUERY
+    # 8. VERIFY LOADING AND RE-EXECUTE QUERY
     if studsar_reloaded:
         print("\nStudSar instance successfully reloaded!")
         query_post_load = "What is the definition of AI?"
-        ids_post, sims_post, segs_post, emotions_post = studsar_reloaded.search(query_post_load, k=1)
+        ids_post, sims_post, segs_post = studsar_reloaded.search(query_post_load, k=1)
         if ids_post:
              print("Best result (post-load):")
-             print(f"  - ID: {ids_post[0]}, Sim: {sims_post[0]:.4f}, Emo: {emotions_post[0] or '-'} - Seg: '{segs_post[0][:120]}...'")
+             print(f"  - ID: {ids_post[0]}, Sim: {sims_post[0]:.4f} - Seg: '{segs_post[0][:120]}...'")
     else:
         print("Error during loading.")
 
     print("\n--- Example Complete ---")
 
-# Version information
+# Versione del pacchetto
 __version__ = "1.0.0"
